@@ -196,11 +196,14 @@ class OpenBCIBoard(object):
   """
   def _read_serial_binary(self, max_bytes_to_skip=3000):
     def read(n):
-      b = self.ser.read(n)
-      if not b:
-        self.warn('Device appears to be stalled. Quitting...')
-        raise RuntimeError('OpenBCI device stalled - no data received')
-      return b
+      # Tolerate short serial gaps before declaring a hard stall.
+      for _ in range(5):
+        b = self.ser.read(n)
+        if b:
+          return b
+        time.sleep(0.01)
+      self.warn('Device appears to be stalled. Quitting...')
+      raise RuntimeError('OpenBCI device stalled - no data received')
 
     for rep in range(max_bytes_to_skip):
 

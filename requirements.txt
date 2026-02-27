@@ -6,4 +6,6 @@ PyQt5>=5.15
 scipy>=0.17.1
 scikit-learn>=0.24
 pyserial>=3.1.1
-pyEDFlib>=0.1.37
+sounddevice>=0.4.6
+soundfile>=0.12.1
+matplotlib>=3.7

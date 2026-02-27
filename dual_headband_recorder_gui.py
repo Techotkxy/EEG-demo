@@ -17,7 +17,6 @@ import sys
 import time
 import threading
 import collections
-import datetime
 from pathlib import Path
 
 import numpy as np
@@ -31,9 +30,11 @@ except ImportError as exc:
     raise SystemExit("Missing GUI dependencies. Install pyqtgraph + PyQt5.") from exc
 
 try:
-    import pyedflib
+    import sounddevice as sd
+    import soundfile as sf
 except ImportError:
-    pyedflib = None
+    sd = None
+    sf = None
 
 sys.path.insert(0, ".")
 import lib.open_bci_v3 as bci
@@ -51,6 +52,7 @@ HIGH_CUTOFF = 50.0
 NOTCH_HZ = 50.0
 NOTCH_Q = 30
 PLOT_AUTO_RANGE_Y = True
+BOARD_RECONNECT_MAX_RETRIES = 5
 
 BANDS = [
     ("Theta", 4, 8),
@@ -105,12 +107,16 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
         self.pending_rows = [[], []]
         self.total_written = [0, 0]
         self.total_samples = [0, 0]
-        self.edf_samples = [[], []]  # in-memory samples for EDF+ export per headband
+        self.sample_index = [0, 0]
         self.current_out_dir = None
         self.current_stamp = None
         self.current_csv_paths = [None, None]
-        self.current_edf_paths = [None, None]
         self.record_started_at = None
+        self.current_audio_path = None
+        self.audio_stream = None
+        self.audio_chunks = []
+        self.audio_fs = 16000
+        self.audio_channels = 1
 
         self.boards = []
         self._connect_boards()
@@ -123,10 +129,19 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
         ]
 
         self.bp_b, self.bp_a = make_bandpass_filter(LOW_CUTOFF, HIGH_CUTOFF, self.sample_rate)
+        self.bp_state = [
+            [np.zeros(max(len(self.bp_a), len(self.bp_b)) - 1, dtype=np.float64) for _ in range(CHANNELS_PER_HEADBAND)]
+            for _ in range(self.n_headbands)
+        ]
         if NOTCH_HZ > 0:
             self.notch_b, self.notch_a = make_notch_filter(NOTCH_HZ, self.sample_rate, q=NOTCH_Q)
+            self.notch_state = [
+                [np.zeros(max(len(self.notch_a), len(self.notch_b)) - 1, dtype=np.float64) for _ in range(CHANNELS_PER_HEADBAND)]
+                for _ in range(self.n_headbands)
+            ]
         else:
             self.notch_b, self.notch_a = None, None
+            self.notch_state = None
         self.band_filters = {name: make_bandpass_filter(lo, hi, self.sample_rate) for name, lo, hi in BANDS}
 
         self.raw_curves = []
@@ -143,7 +158,7 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
             board = None
             for attempt in range(5):
                 try:
-                    board = bci.OpenBCIBoard(port=port)
+                    board = bci.OpenBCIBoard(port=port, timeout=1)
                     break
                 except Exception:
                     time.sleep(1.5)
@@ -220,6 +235,41 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
     def _show_port_info_dialog(self):
         QtWidgets.QMessageBox.information(self, "Dongle-Port Mapping", self._get_port_mapping_text())
 
+    def _audio_callback(self, indata, frames, time_info, status):
+        if status:
+            # Keep running; we only log audio callback warnings to console.
+            print(f"Audio callback warning: {status}")
+        self.audio_chunks.append(indata.copy())
+
+    def _preprocess_hb_sample(self, hb_idx, sample_vals):
+        """
+        Per-sample preprocessing for recording:
+        1) Bandpass 0.3-50 Hz
+        2) Notch 50/60 Hz
+        3) CAR within the 4 channels of this headband
+        """
+        x = np.asarray(sample_vals, dtype=np.float64)
+        y = np.zeros(CHANNELS_PER_HEADBAND, dtype=np.float64)
+
+        # Bandpass each channel with per-channel filter state.
+        for ch in range(CHANNELS_PER_HEADBAND):
+            yi, self.bp_state[hb_idx][ch] = scipy_signal.lfilter(
+                self.bp_b, self.bp_a, [x[ch]], zi=self.bp_state[hb_idx][ch]
+            )
+            y[ch] = yi[0]
+
+        # Notch each channel with per-channel filter state.
+        if self.notch_b is not None:
+            for ch in range(CHANNELS_PER_HEADBAND):
+                yi, self.notch_state[hb_idx][ch] = scipy_signal.lfilter(
+                    self.notch_b, self.notch_a, [y[ch]], zi=self.notch_state[hb_idx][ch]
+                )
+                y[ch] = yi[0]
+
+        # CAR per headband.
+        y = y - np.mean(y)
+        return y.tolist()
+
     def _create_plot_tab(self, title, curve_store):
         widget = pg.GraphicsLayoutWidget()
         widget.setBackground("#0b0b0b")
@@ -247,30 +297,58 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
         def on_sample(sample):
             now = time.time()
             with self.lock:
-                for i in range(min(CHANNELS_PER_HEADBAND, len(sample.channel_data))):
-                    self.buffers[ch_offset + i].append(sample.channel_data[i])
+                if len(sample.channel_data) < CHANNELS_PER_HEADBAND:
+                    return
+                pre = self._preprocess_hb_sample(hb_idx, sample.channel_data[:CHANNELS_PER_HEADBAND])
+                for i in range(CHANNELS_PER_HEADBAND):
+                    self.buffers[ch_offset + i].append(pre[i])
 
                 if self.recording and self.record_writers[hb_idx] is not None:
-                    row = [now, sample.id]
+                    self.sample_index[hb_idx] += 1
+                    t_rel = self.sample_index[hb_idx] / float(self.sample_rate)
+                    row = [now, t_rel, sample.id]
                     sample_vals = []
                     for i in range(CHANNELS_PER_HEADBAND):
-                        val = sample.channel_data[i] if i < len(sample.channel_data) else 0.0
+                        val = pre[i]
                         row.append(val)
                         sample_vals.append(val)
                     row.extend([f"HB{hb_idx + 1}", self.ports[hb_idx]])
                     self.pending_rows[hb_idx].append(row)
-                    self.edf_samples[hb_idx].append(sample_vals)
                 self.total_samples[hb_idx] += 1
 
         return on_sample
 
     def _stream_thread(self, board, hb_idx):
-        try:
-            board.start_streaming(self._make_callback(hb_idx), lapse=-1)
-        except Exception as e:
-            print(f"Stream error HB{hb_idx + 1}: {e}")
-        finally:
-            self.stream_running = False
+        retries = 0
+        while self.stream_running:
+            try:
+                board.start_streaming(self._make_callback(hb_idx), lapse=-1)
+                break
+            except Exception as e:
+                msg = str(e)
+                print(f"Stream error HB{hb_idx + 1}: {msg}")
+                if "stalled" in msg.lower() and retries < BOARD_RECONNECT_MAX_RETRIES:
+                    retries += 1
+                    print(f"HB{hb_idx + 1}: attempting reconnect ({retries}/{BOARD_RECONNECT_MAX_RETRIES})...")
+                    try:
+                        board.stop()
+                    except Exception:
+                        pass
+                    try:
+                        board.disconnect()
+                    except Exception:
+                        pass
+                    # Re-create board on the same COM port and continue streaming.
+                    try:
+                        board = bci.OpenBCIBoard(port=self.ports[hb_idx], timeout=1)
+                        self.boards[hb_idx] = board
+                        time.sleep(1.0)
+                        continue
+                    except Exception as conn_err:
+                        print(f"HB{hb_idx + 1}: reconnect failed: {conn_err}")
+                # Unrecoverable stream failure for this run.
+                self.stream_running = False
+                break
 
     def _start_stream_threads(self):
         for hb_idx, board in enumerate(self.boards):
@@ -308,16 +386,30 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
         self.last_session_name = name.strip()
         self.current_stamp = time.strftime("%Y%m%d_%H%M%S")
         self.current_out_dir = Path(out_dir)
-        self.edf_samples = [[], []]
         self.current_csv_paths = [None, None]
-        self.current_edf_paths = [None, None]
+        self.current_audio_path = self.current_out_dir / f"{self.last_session_name}_AUDIO_{self.current_stamp}.wav"
+        self.audio_chunks = []
         for hb_idx in range(self.n_headbands):
             hb = hb_idx + 1
             port = self.ports[hb_idx]
             out_path = self.current_out_dir / f"{self.last_session_name}_HB{hb}_{port}_{self.current_stamp}.csv"
             f = out_path.open("w", newline="", encoding="utf-8")
             w = csv.writer(f)
-            w.writerow(["timestamp", "sample_id", "AF7", "FP1", "FP2", "AF8", "headband", "port"])
+            w.writerow(
+                [
+                    "timestamp_unix",
+                    "t_rel_sec",
+                    "sample_id",
+                    "AF7",
+                    "FP1",
+                    "FP2",
+                    "AF8",
+                    "headband",
+                    "port",
+                    "processing",
+                ]
+            )
+            w.writerow(["", "", "", "", "", "", "", "", "", "bandpass_0.3_50_notch_car"])
             self.record_files[hb_idx] = f
             self.record_writers[hb_idx] = w
             self.total_written[hb_idx] = 0
@@ -333,78 +425,62 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
                 f"HB2 -> {self.ports[1]}\n\n"
                 f"CSV files:\n"
                 f"{self.current_csv_paths[0]}\n"
-                f"{self.current_csv_paths[1]}"
+                f"{self.current_csv_paths[1]}\n\n"
+                f"Audio file:\n"
+                f"{self.current_audio_path}"
             ),
         )
         return True
 
-    def _export_edf_files(self):
-        if pyedflib is None:
+    def _start_audio_recording(self):
+        if sd is None or sf is None:
             QtWidgets.QMessageBox.warning(
                 self,
-                "EDF Export Skipped",
-                "pyEDFlib is not installed. Install it to enable EDF+ export.",
+                "Microphone Disabled",
+                "sounddevice/soundfile not installed. EEG recording will continue without microphone audio.",
             )
-            return
-        if not self.last_session_name or self.current_out_dir is None or self.current_stamp is None:
-            return
+            return False
+        try:
+            self.audio_stream = sd.InputStream(
+                samplerate=self.audio_fs,
+                channels=self.audio_channels,
+                dtype="float32",
+                callback=self._audio_callback,
+            )
+            self.audio_stream.start()
+            return True
+        except Exception as e:
+            self.audio_stream = None
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Microphone Start Failed",
+                f"Could not start microphone recording.\nReason: {e}\n\nEEG recording will continue.",
+            )
+            return False
 
-        for hb_idx in range(self.n_headbands):
-            samples = self.edf_samples[hb_idx]
-            if not samples:
-                continue
+    def _stop_audio_recording_and_save(self):
+        if self.audio_stream is not None:
+            try:
+                self.audio_stream.stop()
+                self.audio_stream.close()
+            except Exception:
+                pass
+            self.audio_stream = None
 
-            hb = hb_idx + 1
-            port = self.ports[hb_idx]
-            edf_path = self.current_out_dir / f"{self.last_session_name}_HB{hb}_{port}_{self.current_stamp}.edf"
-            self.current_edf_paths[hb_idx] = edf_path
+        if self.current_audio_path is None:
+            return None
+        if sd is None or sf is None:
+            return None
+        if not self.audio_chunks:
+            return None
 
-            arr = np.asarray(samples, dtype=np.float64)  # shape: n_samples x 4
-            if arr.ndim != 2 or arr.shape[1] != CHANNELS_PER_HEADBAND:
-                continue
-            signals = [arr[:, i] for i in range(CHANNELS_PER_HEADBAND)]
-
-            signal_headers = []
-            for i, ch_name in enumerate(ELECTRODE_NAMES):
-                ch = signals[i]
-                pmin = float(np.min(ch))
-                pmax = float(np.max(ch))
-                if abs(pmax - pmin) < 1e-6:
-                    pmin, pmax = -1.0, 1.0
-                signal_headers.append(
-                    {
-                        "label": ch_name,
-                        "dimension": "uV",
-                        "sample_frequency": self.sample_rate,
-                        "physical_min": pmin,
-                        "physical_max": pmax,
-                        "digital_min": -32768,
-                        "digital_max": 32767,
-                        "transducer": "OpenBCI Cyton",
-                        "prefilter": f"BP:{LOW_CUTOFF}-{HIGH_CUTOFF}Hz; Notch:{NOTCH_HZ}Hz Q{NOTCH_Q}",
-                    }
-                )
-
-            header = {
-                "technician": "Cogwear Prototype",
-                "recording_additional": (
-                    f"session={self.last_session_name}; headband=HB{hb}; port={port}; "
-                    f"sample_rate_hz={self.sample_rate}; channels=AF7,FP1,FP2,AF8; units=uV"
-                ),
-                "patientname": f"HB{hb}",
-                "patient_additional": f"port={port};session={self.last_session_name}",
-                "patientcode": f"HB{hb}_{port}",
-                "equipment": "OpenBCI Cyton",
-                "admincode": "Cogwear",
-                "sex": "",
-                "startdate": datetime.datetime.now(),
-                "birthdate": "",
-            }
-
-            with pyedflib.EdfWriter(str(edf_path), CHANNELS_PER_HEADBAND, file_type=pyedflib.FILETYPE_EDFPLUS) as writer:
-                writer.setHeader(header)
-                writer.setSignalHeaders(signal_headers)
-                writer.writeSamples(signals)
+        try:
+            audio = np.concatenate(self.audio_chunks, axis=0)
+            sf.write(str(self.current_audio_path), audio, self.audio_fs)
+            return str(self.current_audio_path)
+        except Exception as e:
+            print(f"Audio save error: {e}")
+            return None
 
     def _close_record_files(self, reset_session=False):
         self._flush_record_buffers()
@@ -419,9 +495,10 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
             self.current_out_dir = None
             self.current_stamp = None
             self.current_csv_paths = [None, None]
-            self.current_edf_paths = [None, None]
-            self.edf_samples = [[], []]
             self.record_started_at = None
+            self.current_audio_path = None
+            self.audio_chunks = []
+            self.sample_index = [0, 0]
 
     def _on_start_recording(self):
         if self.recording:
@@ -437,40 +514,27 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
         self.recording = True
         self.start_pause_btn.setText("Start Recording")
         self._set_status(f"ON ({self.last_session_name})")
+        self._start_audio_recording()
 
     def _on_stop_recording(self):
         self.recording = False
         self._flush_record_buffers()
-        has_data = any(len(x) > 0 for x in self.edf_samples)
-        exported_paths = []
-        if has_data:
-            self._export_edf_files()
-            exported_paths = [str(p) for p in self.current_edf_paths if p is not None]
+        audio_path = self._stop_audio_recording_and_save()
         self._close_record_files(reset_session=True)
         self.start_pause_btn.setText("Start Recording")
         self._set_status("OFF")
-        if has_data and exported_paths:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Recording Stopped",
-                "Recording state: OFF\nEDF export completed:\n" + "\n".join(exported_paths),
-            )
+        msg = "Recording state: OFF\nCSV export completed."
+        if audio_path is not None:
+            msg += "\n\nMicrophone audio saved:\n" + audio_path
+        QtWidgets.QMessageBox.information(
+            self,
+            "Recording Stopped",
+            msg,
+        )
 
     def _preprocess(self, data):
-        data = np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
-        bp = np.empty_like(data)
-        for ch in range(self.n_channels):
-            bp[:, ch] = scipy_signal.filtfilt(self.bp_b, self.bp_a, data[:, ch])
-        if self.notch_b is not None:
-            for ch in range(self.n_channels):
-                bp[:, ch] = scipy_signal.filtfilt(self.notch_b, self.notch_a, bp[:, ch])
-        # CAR per headband
-        for hb_idx in range(self.n_headbands):
-            s = hb_idx * CHANNELS_PER_HEADBAND
-            e = s + CHANNELS_PER_HEADBAND
-            m = np.mean(bp[:, s:e], axis=1, keepdims=True)
-            bp[:, s:e] = bp[:, s:e] - m
-        return bp
+        # Buffers already store per-sample preprocessed raw data.
+        return np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
 
     def _update_plots(self):
         if not self.stream_running:
@@ -529,6 +593,7 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
     def closeEvent(self, event):
         self.stream_running = False
         self.recording = False
+        self._stop_audio_recording_and_save()
         self._close_record_files(reset_session=True)
         for b in self.boards:
             try:
