@@ -108,6 +108,9 @@ class OpenBCIBoard(object):
     self.last_reconnect = 0
     self.reconnect_freq = 5
     self.packets_dropped = 0
+    self._endbyte_warn_count = 0  # rate-limit END_BYTE warnings
+    self._total_packets_ok = 0
+    self._total_packets_dropped = 0
 
     #Disconnects from board when terminated
     atexit.register(self.disconnect)
@@ -126,6 +129,10 @@ class OpenBCIBoard(object):
   
   def getNbAUXChannels(self):
     return  self.aux_channels_per_sample
+
+  def get_packet_stats(self):
+    """Return (ok_count, dropped_count) for packet loss display."""
+    return (self._total_packets_ok, self._total_packets_dropped)
 
   def run(self):
     self.start_streaming()
@@ -192,12 +199,8 @@ class OpenBCIBoard(object):
       b = self.ser.read(n)
       if not b:
         self.warn('Device appears to be stalled. Quitting...')
-        sys.exit()
-        raise Exception('Device Stalled')
-        sys.exit()
-        return '\xFF'
-      else:
-        return b
+        raise RuntimeError('OpenBCI device stalled - no data received')
+      return b
 
     for rep in range(max_bytes_to_skip):
 
@@ -207,7 +210,6 @@ class OpenBCIBoard(object):
         b = read(1)
         if struct.unpack('B', b)[0] == START_BYTE:
           if(rep != 0):
-            # self.warn('Skipped %d bytes before start found' %(rep))
             rep = 0;
           packet_id = struct.unpack('B', read(1))[0] #packet id goes from 0-255
           log_bytes_in = str(packet_id);
@@ -267,12 +269,20 @@ class OpenBCIBoard(object):
         if (val == END_BYTE):
           sample = OpenBCISample(packet_id, channel_data, aux_data)
           self.packets_dropped = 0
+          self._endbyte_warn_count = 0
+          self._total_packets_ok = self._total_packets_ok + 1
           return sample
         else:
-          self.warn("ID:<%d> <Unexpected END_BYTE found <%s> instead of <%s>"      
-            %(packet_id, val, END_BYTE))
-          logging.debug(log_bytes_in);
           self.packets_dropped = self.packets_dropped + 1
+          self._total_packets_dropped = self._total_packets_dropped + 1
+          # Rate-limit: only warn when loss is significant or every 100th drop
+          self._endbyte_warn_count += 1
+          total = self._total_packets_ok + self._total_packets_dropped
+          loss_pct = (100.0 * self._total_packets_dropped / total) if total > 100 else 0
+          if loss_pct >= 1.0 or self._endbyte_warn_count <= 2 or self._endbyte_warn_count % 100 == 0:
+            self.warn("ID:<%d> <Unexpected END_BYTE> (dropped %d, %.2f%% loss - check radio channel)"      
+              %(packet_id, self._total_packets_dropped, loss_pct))
+          self.read_state = 0  # resync: look for next START_BYTE
   
   """
 
@@ -485,71 +495,71 @@ class OpenBCIBoard(object):
   def set_channel(self, channel, toggle_position):
     #Commands to set toggle to on position
     if toggle_position == 1:
-      if channel is 1:
+      if channel == 1:
         self.ser.write(b'!')
-      if channel is 2:
+      if channel == 2:
         self.ser.write(b'@')
-      if channel is 3:
+      if channel == 3:
         self.ser.write(b'#')
-      if channel is 4:
+      if channel == 4:
         self.ser.write(b'$')
-      if channel is 5:
+      if channel == 5:
         self.ser.write(b'%')
-      if channel is 6:
+      if channel == 6:
         self.ser.write(b'^')
-      if channel is 7:
+      if channel == 7:
         self.ser.write(b'&')
-      if channel is 8:
+      if channel == 8:
         self.ser.write(b'*')
-      if channel is 9 and self.daisy:
+      if channel == 9 and self.daisy:
         self.ser.write(b'Q')
-      if channel is 10 and self.daisy:
+      if channel == 10 and self.daisy:
         self.ser.write(b'W')
-      if channel is 11 and self.daisy:
+      if channel == 11 and self.daisy:
         self.ser.write(b'E')
-      if channel is 12 and self.daisy:
+      if channel == 12 and self.daisy:
         self.ser.write(b'R')
-      if channel is 13 and self.daisy:
+      if channel == 13 and self.daisy:
         self.ser.write(b'T')
-      if channel is 14 and self.daisy:
+      if channel == 14 and self.daisy:
         self.ser.write(b'Y')
-      if channel is 15 and self.daisy:
+      if channel == 15 and self.daisy:
         self.ser.write(b'U')
-      if channel is 16 and self.daisy:
+      if channel == 16 and self.daisy:
         self.ser.write(b'I')
     #Commands to set toggle to off position
     elif toggle_position == 0:
-      if channel is 1:
+      if channel == 1:
         self.ser.write(b'1')
-      if channel is 2:
+      if channel == 2:
         self.ser.write(b'2')
-      if channel is 3:
+      if channel == 3:
         self.ser.write(b'3')
-      if channel is 4:
+      if channel == 4:
         self.ser.write(b'4')
-      if channel is 5:
+      if channel == 5:
         self.ser.write(b'5')
-      if channel is 6:
+      if channel == 6:
         self.ser.write(b'6')
-      if channel is 7:
+      if channel == 7:
         self.ser.write(b'7')
-      if channel is 8:
+      if channel == 8:
         self.ser.write(b'8')
-      if channel is 9 and self.daisy:
+      if channel == 9 and self.daisy:
         self.ser.write(b'q')
-      if channel is 10 and self.daisy:
+      if channel == 10 and self.daisy:
         self.ser.write(b'w')
-      if channel is 11 and self.daisy:
+      if channel == 11 and self.daisy:
         self.ser.write(b'e')
-      if channel is 12 and self.daisy:
+      if channel == 12 and self.daisy:
         self.ser.write(b'r')
-      if channel is 13 and self.daisy:
+      if channel == 13 and self.daisy:
         self.ser.write(b't')
-      if channel is 14 and self.daisy:
+      if channel == 14 and self.daisy:
         self.ser.write(b'y')
-      if channel is 15 and self.daisy:
+      if channel == 15 and self.daisy:
         self.ser.write(b'u')
-      if channel is 16 and self.daisy:
+      if channel == 16 and self.daisy:
         self.ser.write(b'i')
 
   def find_port(self):

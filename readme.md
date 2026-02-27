@@ -1,3 +1,108 @@
+# EEG-demo / Cogwear Demo
+
+Real-time EEG streaming, visualization, recording, and EDF export for OpenBCI Cyton headbands.
+
+## What this project supports now
+
+- 1 to 4 headbands in the multi-window viewer (`view_raw_signal.py`)
+- Dedicated 2-headband recording GUI (`dual_headband_recorder_gui.py`)
+- Live plots for:
+  - Raw EEG
+  - Theta (4-8 Hz)
+  - Alpha (8-13 Hz)
+  - Beta (13-30 Hz)
+  - (Gamma + synchrony in the multi-headband viewer)
+- Start/Stop recording workflow
+- Separate file output per headband
+- EDF+ export with channel metadata (`AF7, FP1, FP2, AF8`, units `uV`, sample rate)
+
+## Quick start
+
+1. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Connect dongles and power on headbands.
+3. Ensure each headband uses a different radio channel (see `RADIO_SETUP.md`).
+
+## Main scripts
+
+### 1) Multi-headband real-time viewer
+
+```bash
+python view_raw_signal.py COM3
+python view_raw_signal.py COM3 COM4
+python view_raw_signal.py COM3 COM4 COM5 COM6
+```
+
+- Shows raw and band windows.
+- For 2+ headbands, also shows synchrony (PLV) window.
+
+### 2) Two-headband recording GUI (recommended for recording)
+
+```bash
+python dual_headband_recorder_gui.py COM3 COM4
+```
+
+Features:
+- Raw/Theta/Alpha/Beta tabs
+- `Start Recording` button:
+  - asks recording name
+  - asks save folder
+  - starts simultaneous HB1/HB2 recording
+- `Stop Recording` button:
+  - sets GUI state to `Recording: OFF`
+  - exports EDF+ per headband
+  - reports exported paths
+- Dongle-port mapping button with COM + USB details
+- Live metrics:
+  - elapsed recording time
+  - sample counters
+  - packet-loss indicators per headband
+
+### 3) Visualize 2 EDF recordings together
+
+```bash
+python visualize_two_edf.py "D:\Cogwear demo\test\test1_HB1_COM3_20260227_124306.edf" "D:\Cogwear demo\test\test1_HB2_COM4_20260227_124306.edf"
+```
+
+- Loads both EDF files
+- Displays 8 channels with labels:
+  - `HB1_AF7, HB1_FP1, HB1_FP2, HB1_AF8`
+  - `HB2_AF7, HB2_FP1, HB2_FP2, HB2_AF8`
+- Tabs for Raw/Theta/Alpha/Beta
+
+## Recording output format
+
+Each recording session creates separate files per headband:
+
+- CSV:
+  - `<session>_HB1_<PORT>_<timestamp>.csv`
+  - `<session>_HB2_<PORT>_<timestamp>.csv`
+- EDF+:
+  - `<session>_HB1_<PORT>_<timestamp>.edf`
+  - `<session>_HB2_<PORT>_<timestamp>.edf`
+
+EDF+ includes:
+- channel labels: `AF7, FP1, FP2, AF8`
+- sample rate from board (typically 250 Hz)
+- units: `uV`
+- recording metadata (session, headband ID, COM port, prefilter info)
+
+## Documentation
+
+- `CURRENT_SETUP_TUTORIAL.md` - end-to-end usage tutorial (recommended)
+- `RADIO_SETUP.md` - radio/channel setup and interference mitigation
+- `SETUP_NOTES.md` - environment notes
+- `EEG_Viewer_Report.docx` / `.html` - project report snapshot
+
+## Notes
+
+- If a port is busy/not found, unplug/replug dongle and retry.
+- For 4 dongles, a powered USB hub is recommended.
+- If packet loss rises, verify radio channel separation and USB layout.
 OpenBCI_LSL
 ==============
 

@@ -1,0 +1,132 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+<head>
+<meta charset="UTF-8">
+<title>OpenBCI EEG Viewer - Technical Report</title>
+<style>
+body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; line-height: 1.4; margin: 1in; }
+h1 { font-size: 18pt; color: #2E5090; border-bottom: 2px solid #2E5090; padding-bottom: 6px; }
+h2 { font-size: 14pt; color: #2E5090; margin-top: 18pt; }
+h3 { font-size: 12pt; margin-top: 12pt; }
+table { border-collapse: collapse; margin: 12pt 0; }
+th, td { border: 1px solid #333; padding: 6pt 10pt; text-align: left; }
+th { background: #E6E6E6; font-weight: bold; }
+ul { margin: 6pt 0; }
+li { margin: 3pt 0; }
+.code { font-family: Consolas, monospace; background: #F5F5F5; padding: 2pt 6pt; }
+</style>
+</head>
+<body>
+
+<h1>OpenBCI EEG Viewer – Technical Report</h1>
+<p><strong>Document:</strong> Cogwear Demo EEG Viewer<br>
+<strong>Version:</strong> Multi-headband real-time viewer with synchrony analysis</p>
+
+<h2>1. Overview</h2>
+<p>The EEG Viewer is a real-time visualization and analysis application for OpenBCI Cyton headbands. It supports 1–4 headbands simultaneously (4–16 channels), with preprocessing, frequency-band decomposition, and inter-subject EEG synchrony (Phase Locking Value) when multiple headbands are connected.</p>
+
+<h2>2. Hardware Support</h2>
+<table>
+<tr><th>Feature</th><th>Specification</th></tr>
+<tr><td>Headbands</td><td>1–4 OpenBCI Cyton headbands</td></tr>
+<tr><td>Channels per headband</td><td>4 (AF7, FP1, FP2, AF8)</td></tr>
+<tr><td>Total channels</td><td>4, 8, 12, or 16</td></tr>
+<tr><td>Sample rate</td><td>250 Hz</td></tr>
+<tr><td>Connection</td><td>USB dongle per headband → COM port (e.g. COM3, COM4)</td></tr>
+<tr><td>Radio</td><td>Each headband must use a different radio channel (see RADIO_SETUP.md)</td></tr>
+</table>
+
+<h2>3. Usage</h2>
+<table>
+<tr><th>Command</th><th>Description</th></tr>
+<tr><td><span class="code">python view_raw_signal.py COM3</span></td><td>Single headband</td></tr>
+<tr><td><span class="code">python view_raw_signal.py COM3 COM4</span></td><td>Two headbands</td></tr>
+<tr><td><span class="code">python view_raw_signal.py COM3 COM4 COM5 COM6</span></td><td>Four headbands (default when no ports specified)</td></tr>
+</table>
+
+<h2>4. Display Windows</h2>
+<ul>
+<li><strong>Raw EEG</strong> – Preprocessed signal (0.3–50 Hz bandpass, notch, ICA, z-score) in 5-second rolling window</li>
+<li><strong>Theta (4–8 Hz)</strong> – Band-filtered theta activity</li>
+<li><strong>Alpha (8–13 Hz)</strong> – Band-filtered alpha activity</li>
+<li><strong>Beta (13–30 Hz)</strong> – Band-filtered beta activity</li>
+<li><strong>Gamma (30–60 Hz)</strong> – Band-filtered gamma activity</li>
+<li><strong>EEG Synchrony (PLV)</strong> – Pairwise Phase Locking Value in alpha band (8–13 Hz); shown only when 2+ headbands are connected</li>
+</ul>
+<p>Plots are arranged in a grid (2×2 for 4 channels, 2×4 for 8, 4×4 for 16). Packet loss and flat-signal indicators appear at the bottom of the Raw EEG window.</p>
+
+<h2>5. Signal Processing Pipeline</h2>
+<h3>5.1 Preprocessing (applied to all channels)</h3>
+<table>
+<tr><th>Step</th><th>Setting</th><th>Value</th></tr>
+<tr><td>Bandpass</td><td>Low / High cutoff</td><td>0.3 Hz / 50 Hz (4th-order Butterworth)</td></tr>
+<tr><td>Notch</td><td>Frequency / Q</td><td>50 Hz (or 60 Hz) / Q=30</td></tr>
+<tr><td>Common Average Reference (CAR)</td><td>Per headband</td><td>Subtract mean of 4 channels from each channel within that headband</td></tr>
+<tr><td>ICA</td><td>FastICA, kurtosis-based rejection</td><td>Reject components with |z| > 1.96; refit every 2.5 s</td></tr>
+</table>
+
+<h3>5.2 Display-Only Processing</h3>
+<p>These steps affect visualization only, not stored or exported data:</p>
+<ul>
+<li>Median filter (5-point) to reduce spikes</li>
+<li>Outlier rejection: replace values beyond ±2 z-score with local median</li>
+<li>Moving average smoothing (15-point)</li>
+<li>Display clipping at ±2.5 z-score</li>
+<li>Y-axis auto-range</li>
+</ul>
+
+<h2>6. EEG Synchrony (Multi-Headband)</h2>
+<p>When 2 or more headbands are connected:</p>
+<ul>
+<li><strong>Phase Locking Value (PLV)</strong> is computed in the alpha band (8–13 Hz) for all pairwise combinations (e.g. HB1–HB2, HB1–HB3, HB1–HB4, HB2–HB3, HB2–HB4, HB3–HB4 for 4 headbands).</li>
+<li>Each headband’s signal is the mean of its 4 channels.</li>
+<li>PLV ranges from 0 (no phase locking) to 1 (strong phase locking).</li>
+<li>Bar chart updates in real time (~30 Hz).</li>
+</ul>
+
+<h2>7. Diagnostics and Monitoring</h2>
+<ul>
+<li><strong>Packet loss</strong> – Per-headband count and percentage (e.g. HB1: 0.02% (7/33831))</li>
+<li><strong>Flat-signal indicator</strong> – “⚠flat” when a headband’s signal is much flatter than others (suggests poor electrode contact)</li>
+<li><strong>Cross-talk check</strong> – After ~5 s, warns if two headbands show correlation > 0.92 (possible same radio channel)</li>
+<li><strong>Radio channel reminder</strong> – Startup message when 2+ headbands; see RADIO_SETUP.md for configuration</li>
+</ul>
+
+<h2>8. Configuration Summary</h2>
+<table>
+<tr><th>Parameter</th><th>Value</th></tr>
+<tr><td>LOW_CUTOFF</td><td>0.3 Hz</td></tr>
+<tr><td>HIGH_CUTOFF</td><td>50 Hz</td></tr>
+<tr><td>NOTCH_HZ</td><td>50 (or 60 for Americas)</td></tr>
+<tr><td>NOTCH_Q</td><td>30</td></tr>
+<tr><td>USE_CAR</td><td>True</td></tr>
+<tr><td>ICA_DISABLED</td><td>False</td></tr>
+<tr><td>Z_THRESHOLD</td><td>1.96</td></tr>
+<tr><td>ICA_UPDATE_INTERVAL_MS</td><td>2500</td></tr>
+<tr><td>PLOT_REFRESH_MS</td><td>33 (~30 Hz)</td></tr>
+<tr><td>DISPLAY_SMOOTH</td><td>15</td></tr>
+<tr><td>OUTLIER_REJECT_Z</td><td>2.0</td></tr>
+<tr><td>DISPLAY_CLIP_Z</td><td>2.5</td></tr>
+<tr><td>DISPLAY_MEDIAN_FILTER</td><td>5</td></tr>
+<tr><td>SYNC_BAND (PLV)</td><td>8–13 Hz (alpha)</td></tr>
+</table>
+
+<h2>9. Dependencies</h2>
+<ul>
+<li>Python 3</li>
+<li>pyqtgraph, PyQt5</li>
+<li>numpy, scipy</li>
+<li>scikit-learn (FastICA)</li>
+<li>pyserial</li>
+</ul>
+
+<h2>10. File Structure</h2>
+<ul>
+<li><span class="code">view_raw_signal.py</span> – Main viewer application</li>
+<li><span class="code">lib/open_bci_v3.py</span> – OpenBCI serial protocol and board interface</li>
+<li><span class="code">RADIO_SETUP.md</span> – Radio channel configuration guide</li>
+</ul>
+
+<p style="margin-top: 24pt; font-size: 9pt; color: #666;">Report generated for Cogwear Demo EEG Viewer. Open this file in Microsoft Word and save as .docx if needed.</p>
+
+</body>
+</html>
