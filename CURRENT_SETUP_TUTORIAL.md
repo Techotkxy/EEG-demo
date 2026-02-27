@@ -1,6 +1,6 @@
-# Current Setup Tutorial (2-Headband Recording + EDF)
+# Current Setup Tutorial (2-Headband Recording + CSV)
 
-This tutorial is for the current Cogwear setup using two OpenBCI headbands and the new recording GUI.
+This tutorial is for the current Cogwear setup using two OpenBCI headbands and the latest recorder GUI.
 
 ## 1) Prerequisites
 
@@ -52,8 +52,8 @@ You will see live metrics:
 
 1. Click **Stop Recording**.
 2. GUI state changes to **Recording: OFF**.
-3. EDF+ export is performed per headband.
-4. A popup shows the exported EDF file paths.
+3. Recording files are finalized and closed.
+4. A popup confirms completion and shows audio path (if microphone recording is enabled).
 
 ## 7) Output files
 
@@ -62,20 +62,18 @@ For each session, files are written separately for each headband:
 - CSV:
   - `<name>_HB1_COMx_<timestamp>.csv`
   - `<name>_HB2_COMy_<timestamp>.csv`
-- EDF+:
-  - `<name>_HB1_COMx_<timestamp>.edf`
-  - `<name>_HB2_COMy_<timestamp>.edf`
+- Optional microphone:
+  - `<name>_AUDIO_<timestamp>.wav`
 
-EDF+ metadata includes:
-- channels: `AF7, FP1, FP2, AF8`
-- units: `uV`
-- sample rate (from board)
-- session/headband/port info
+CSV signals are already **preprocessed raw EEG**:
+- bandpass (0.3-50 Hz)
+- notch (50/60 Hz, depending config)
+- CAR per headband
 
-## 8) Visualize two EDF files
+## 8) Visualize two CSV files
 
 ```bash
-python visualize_two_edf.py "D:\path\file_HB1.edf" "D:\path\file_HB2.edf"
+python visualize_two_csv.py "D:\path\file_HB1.csv" "D:\path\file_HB2.csv"
 ```
 
 This opens one GUI with:
@@ -85,6 +83,12 @@ This opens one GUI with:
 - Beta
 
 for all 8 channels (`HB1_*` + `HB2_*`).
+
+Alternative simple plotting:
+
+```bash
+python plot_preprocessed_csv.py "D:\path\file_HB1.csv" "D:\path\file_HB2.csv"
+```
 
 ## 9) Troubleshooting
 

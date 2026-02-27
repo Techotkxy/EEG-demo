@@ -1,35 +1,32 @@
 # EEG-demo / Cogwear Demo
 
-Real-time EEG streaming, visualization, recording, and EDF export for OpenBCI Cyton headbands.
+Real-time EEG streaming and recording for OpenBCI Cyton headbands.
 
-## What this project supports now
+## Current workflow (latest)
 
-- 1 to 4 headbands in the multi-window viewer (`view_raw_signal.py`)
-- Dedicated 2-headband recording GUI (`dual_headband_recorder_gui.py`)
-- Live plots for:
-  - Raw EEG
-  - Theta (4-8 Hz)
-  - Alpha (8-13 Hz)
-  - Beta (13-30 Hz)
-  - (Gamma + synchrony in the multi-headband viewer)
-- Start/Stop recording workflow
-- Separate file output per headband
-- EDF+ export with channel metadata (`AF7, FP1, FP2, AF8`, units `uV`, sample rate)
+- Live multi-headband viewer: `view_raw_signal.py`
+- Dedicated 2-headband recorder GUI: `dual_headband_recorder_gui.py`
+- CSV plotting tools:
+  - `plot_preprocessed_csv.py` (simple matplotlib)
+  - `visualize_two_csv.py` (tabbed pyqtgraph)
 
-## Quick start
+> Current recorder output is **CSV + WAV** (no EDF export in this version).
 
-1. Install dependencies:
+## Install
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Connect dongles and power on headbands.
-3. Ensure each headband uses a different radio channel (see `RADIO_SETUP.md`).
+## Hardware notes
 
-## Main scripts
+- One dongle per headband (separate COM ports).
+- Use different radio channels per headband to reduce interference.
+- See `RADIO_SETUP.md` for channel setup details.
 
-### 1) Multi-headband real-time viewer
+## Run scripts
+
+### 1) Multi-headband viewer (1-4 headbands)
 
 ```bash
 python view_raw_signal.py COM3
@@ -37,193 +34,59 @@ python view_raw_signal.py COM3 COM4
 python view_raw_signal.py COM3 COM4 COM5 COM6
 ```
 
-- Shows raw and band windows.
-- For 2+ headbands, also shows synchrony (PLV) window.
-
-### 2) Two-headband recording GUI (recommended for recording)
+### 2) 2-headband recorder GUI (recommended)
 
 ```bash
 python dual_headband_recorder_gui.py COM3 COM4
 ```
 
 Features:
-- Raw/Theta/Alpha/Beta tabs
-- `Start Recording` button:
-  - asks recording name
-  - asks save folder
-  - starts simultaneous HB1/HB2 recording
-- `Stop Recording` button:
-  - sets GUI state to `Recording: OFF`
-  - exports EDF+ per headband
-  - reports exported paths
-- Dongle-port mapping button with COM + USB details
-- Live metrics:
-  - elapsed recording time
-  - sample counters
-  - packet-loss indicators per headband
+- Raw/Theta/Alpha/Beta real-time plots
+- Start/Stop recording controls
+- Dongle-to-port mapping helper (COM + USB details)
+- Live metrics (elapsed time, samples, packet loss)
+- Optional microphone capture synchronized to EEG session
 
-### 3) Visualize 2 EDF recordings together
+## What is written to disk
+
+For session name `test8` at timestamp `20260227_152855`:
+
+- `test8_HB1_COM3_20260227_152855.csv`
+- `test8_HB2_COM4_20260227_152855.csv`
+- `test8_AUDIO_20260227_152855.wav` (if microphone enabled)
+
+### CSV content
+
+The recorder writes **preprocessed raw EEG** per headband channel:
+- Bandpass: 0.3-50 Hz
+- Notch: 50 Hz (configurable)
+- CAR: per-headband common average reference
+
+Columns:
+- `timestamp_unix`
+- `t_rel_sec`
+- `sample_id`
+- `AF7`, `FP1`, `FP2`, `AF8`
+- `headband`
+- `port`
+- `processing`
+
+## Plot recorded CSV files
+
+### Simple static plot
 
 ```bash
-python visualize_two_edf.py "D:\Cogwear demo\test\test1_HB1_COM3_20260227_124306.edf" "D:\Cogwear demo\test\test1_HB2_COM4_20260227_124306.edf"
+python plot_preprocessed_csv.py "D:\Cogwear demo\test\test8_HB1_COM3_20260227_152855.csv" "D:\Cogwear demo\test\test8_HB2_COM4_20260227_152855.csv"
 ```
 
-- Loads both EDF files
-- Displays 8 channels with labels:
-  - `HB1_AF7, HB1_FP1, HB1_FP2, HB1_AF8`
-  - `HB2_AF7, HB2_FP1, HB2_FP2, HB2_AF8`
-- Tabs for Raw/Theta/Alpha/Beta
+### Tabbed plot (Raw/Theta/Alpha/Beta)
 
-## Recording output format
+```bash
+python visualize_two_csv.py "D:\Cogwear demo\test\test8_HB1_COM3_20260227_152855.csv" "D:\Cogwear demo\test\test8_HB2_COM4_20260227_152855.csv"
+```
 
-Each recording session creates separate files per headband:
+## Additional docs
 
-- CSV:
-  - `<session>_HB1_<PORT>_<timestamp>.csv`
-  - `<session>_HB2_<PORT>_<timestamp>.csv`
-- EDF+:
-  - `<session>_HB1_<PORT>_<timestamp>.edf`
-  - `<session>_HB2_<PORT>_<timestamp>.edf`
-
-EDF+ includes:
-- channel labels: `AF7, FP1, FP2, AF8`
-- sample rate from board (typically 250 Hz)
-- units: `uV`
-- recording metadata (session, headband ID, COM port, prefilter info)
-
-## Documentation
-
-- `CURRENT_SETUP_TUTORIAL.md` - end-to-end usage tutorial (recommended)
-- `RADIO_SETUP.md` - radio/channel setup and interference mitigation
-- `SETUP_NOTES.md` - environment notes
-- `EEG_Viewer_Report.docx` / `.html` - project report snapshot
-
-## Notes
-
-- If a port is busy/not found, unplug/replug dongle and retry.
-- For 4 dongles, a powered USB hub is recommended.
-- If packet loss rises, verify radio channel separation and USB layout.
-OpenBCI_LSL
-==============
-
-This tutorial contains information on how to stream [OpenBCI](http://openbci.com/) data through the [Lab Streaming Layer (LSL)](https://github.com/sccn/labstreaminglayer) network protocol.
-
-Lab streaming layer is a networking system for real time streaming, recording, and analysis of time-series data. LSL can be used to connect OpenBCI to applications that can record, analyze, and manipulate the data, such as Matlab, NeuroPype, BCILAB, and others.
-
-The [OpenBCI_LSL](link) repo contains a Python script that establishes an LSL stream of OpenBCI data, as well as the libraries and files needed to run LSL. This program is compatible with Windows, OSX, and Linux.
-
-If you're having any issues, please see the [Troubleshooting](#TROUBLESHOOTING) section of this document. If your issue is not listed there, raise an issue on this Github repo.
-
-
-# SETUP
-
-1. **Download or clone the [OpenBCI_LSL](https://github.com/OpenBCI/OpenBCI_LSL) repo from Github**
-
-2. **Download and install [Python](https://www.python.org/downloads/) (either version 2 or 3).**
-
-	Python might already be installed on your computer. Type `python --version` to check if you have Python version 2 or 3 installed. 
-
-3. **Install Python requirements**
-
-	To use this program, you need the following Python packages installed:
-	
-	- pylsl (version 1.10.5 or greater)
-	
-	- pyserial (version 3.1.1 or greater)
-	
-	- numpy (version 1.11.1 or greater)
-	
-	- pyqtgraph (version 0.9.10 or greater) (optional: needded for GUI functionality only)
-	
-	- scipy (version 0.17.1 or greater) (optional: needed for GUI functionality only)
-	
-	
-
-	To automatically install using pip, navigate to the "OpenBCI_LSL" folder on your command line and terminal, and type:
-
-	`pip install -r requirements.txt`
-
-	Note: `pip` may have issues install numpy and scipy for some users. Install these manually if you have issues.
-	
-	Note: If you get the message "pip: command not found", you need to install pip: `sudo easy_install pip`. Then retry the command above.
-	
-	To use the GUI features of this application, you must separately install PyQt4 using these instructions: [Install PyQt4](http://pyqt.sourceforge.net/Docs/PyQt4/installation.html). The command line version of this program is still functional if PyQt4 is not installed.
-
-
-# Usage
-
-## Command Line Interface
-
-#### Simple Stream
-
-**First, make sure your dongle is plugged in and board is powered on.** Then go the the "OpenBCI_LSL" folder and type the following command:
-
-`python openbci_lsl.py --stream`
-
-After a few moments, you should see this output:
-
-![cli](https://raw.githubusercontent.com/gabrielibagon/OpenBCI_LSL/master/images/CLI.jpg)
-
-If an error is raised about not being able to find your the board or serial port, you can override the automatic board detection by specifying the serial port in a command line argument before "--stream". The format is as follows:
-
-`python openbci_lsl.py [PORT] --stream`
-
-For example:
-
-`python openbci_lsl.py /dev/ttyUSB0 --stream`
-
-After board initialization, you are now ready to start streaming.
-
-To begin streaming, type `/start`
-
-To stop streaming, type `/stop`
-
-To disconnect from the serial port, type `/exit` 
-
-Remember to use `/exit` to disconnect the board as you end the program, to ensure that the serial port is safely closed.
-
-#### Configuring the board from the command line interface
-
-You also configure board settings from this interface. For full information regarding board settings and commands, see the [OpenBCI Firmware SDK](http://docs.openbci.com/software/01-OpenBCI_SDK)
-
-To enter Channel Settings mode, you would need to enter an "x", followed by certain channel settings, followed by an "X". For example:
-
-`--> x3020000X `
-
-This command will do the following: ‘x’ enters Channel Settings mode. Channel 3 is set up to be powered up, with gain of 2, normal input, removed from BIAS generation, removed from SRB2, removed from SRB1. The final ‘X’ latches the settings to the ADS1299 channel settings register.
-
-To view current board and register settings, enter: `--> ?`
-
-If you get an error message at any point while using the command line interface, check the [Troubleshooting](#troubleshooting) section, or pull up an issue on the Github repository.
-
-#### Changing Channel Locations from the command line interface
-
-To change the channel location metadata of the stream, type `/loc` followed by a space and then a comma-separated list of new set of channel locations. For example, to change the default channel locations to a new set of eight channels, the command might look like this:
-
-`-->/loc F3,F4,C3,C4,T3,T4,P3,P4`
-
-This can only be done while the board is not currently streaming.
-
-## GUI
-
-If you would like the ability to configure the board and LSL stream with advanced settings, you can do so by running the GUI. The GUI comes up by default if you run the program with no flags:
-
-`python openbci_lsl.py`
-
-If you plug in your board and dongle before running the above command, the program should have already detected the appropriate settings for your board (port and daisy). If not, you can enter those yourself in the appropriate fields.
-
-![gui](https://raw.githubusercontent.com/gabrielibagon/OpenBCI_LSL/master/images/GUI.jpg)
-
-#### Streaming
-To stream data, make sure the appropriate Port, Daisy, and LSL Stream fields are filled in correctly. Then, press "Connect" and then "Start Streaming". To pause streaming, click "Stop Streaming". To disconnect the board, press "Disconnect".
-
-The board must be disconnected to change LSL settings. Once you "Connect" again, your current settings are saved until the next time you disconnect.
-
-For consistent performance, pause streaming before you disconnect the board.
-
-#### Configuring the board from the GUI
-To change the channel settings, click on "Board Config". Note: this must be done BEFORE you press "Connect".
-
-# Troubleshooting
-
-Note: Many issues with board connectivity can simply be resolved by restarting the program and your board. Unplug your dongle, turn off the board, plug in the dongle, and turn on the board, in that order. This method works the most consistently.
+- `CURRENT_SETUP_TUTORIAL.md`: step-by-step usage tutorial
+- `RADIO_SETUP.md`: radio channel recommendations
+- `SETUP_NOTES.md`: setup summary and notes
