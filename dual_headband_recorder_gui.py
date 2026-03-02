@@ -17,6 +17,7 @@ import sys
 import time
 import threading
 import collections
+import re
 from pathlib import Path
 
 import numpy as np
@@ -87,6 +88,11 @@ def channel_label(ch_idx):
     hb = ch_idx // CHANNELS_PER_HEADBAND + 1
     elec = ELECTRODE_NAMES[ch_idx % CHANNELS_PER_HEADBAND]
     return f"HB{hb}_{elec}"
+
+
+def safe_token(text):
+    """Convert text into a filesystem-safe token for filenames."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", str(text)).strip("_")
 
 
 class DualHeadbandRecorder(QtWidgets.QMainWindow):
@@ -392,8 +398,19 @@ class DualHeadbandRecorder(QtWidgets.QMainWindow):
         for hb_idx in range(self.n_headbands):
             hb = hb_idx + 1
             port = self.ports[hb_idx]
-            out_path = self.current_out_dir / f"{self.last_session_name}_HB{hb}_{port}_{self.current_stamp}.csv"
-            f = out_path.open("w", newline="", encoding="utf-8")
+            session_token = safe_token(self.last_session_name)
+            port_token = safe_token(port)
+            out_path = self.current_out_dir / f"{session_token}_HB{hb}_{port_token}_{self.current_stamp}.csv"
+            try:
+                self.current_out_dir.mkdir(parents=True, exist_ok=True)
+                f = out_path.open("w", newline="", encoding="utf-8")
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Cannot Create Recording File",
+                    f"Failed to create:\n{out_path}\n\nReason:\n{e}",
+                )
+                return False
             w = csv.writer(f)
             w.writerow(
                 [

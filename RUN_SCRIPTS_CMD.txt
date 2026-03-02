@@ -1,0 +1,27 @@
+Cogwear Demo - CMD Run Scripts
+==============================
+
+1) Open CMD and go to project folder:
+
+cd /d "D:\Cogwear demo"
+
+
+2) Run 2-headband recorder GUI (live recording):
+
+python dual_headband_recorder_gui.py COM3 COM4
+
+
+3) Visualize two recorded CSV files (simple matplotlib plot):
+
+python plot_preprocessed_csv.py "D:\Cogwear demo\test\test8_HB1_COM3_20260227_152855.csv" "D:\Cogwear demo\test\test8_HB2_COM4_20260227_152855.csv"
+
+
+4) Visualize two recorded CSV files (tabbed Raw/Theta/Alpha/Beta GUI):
+
+python visualize_two_csv.py "D:\Cogwear demo\test\test8_HB1_COM3_20260227_152855.csv" "D:\Cogwear demo\test\test8_HB2_COM4_20260227_152855.csv"
+
+
+Notes
+-----
+- Replace COM ports if needed (e.g., COM5, COM6).
+- Replace CSV file paths with your latest recordings.
